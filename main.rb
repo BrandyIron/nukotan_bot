@@ -51,9 +51,10 @@ class Instagram < SuperNukotan
 
 	def get_newest_info
 		doc = Nokogiri::HTML.parse(Capybara.html)
-		elem = doc.css('div._myci9 > a').first
+		# elem = doc.css('div._myci9 > a').first
+		elem = doc.css('div._myci9').children.first
 		newest = {}
-		newest[:path] = Capybara.app_host + elem[:href]
+		newest[:path] = Capybara.app_host + elem.css('a').first[:href]
 		newest[:images] = [elem.css('img').first[:src]]
 		newest[:body] = elem.css('img').first[:alt]
 		newest[:date] = Time.now.strftime("%Y-%m-%d %H:%M:%S")
