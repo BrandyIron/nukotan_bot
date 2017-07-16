@@ -1,5 +1,6 @@
 require 'capybara'
 require 'capybara/user_agent'
+require 'capybara/poltergeist'
 require 'selenium-webdriver'
 require 'capybara/dsl'
 require 'pp'
@@ -15,10 +16,9 @@ class SuperNukotan
 	include Capybara::DSL
 	def initialize ()
 		# configure parameters in capybara
-		Capybara.default_driver = :selenium
 		Capybara::UserAgent.add_user_agents(your_browser: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/52.0.2743.116 Safari/537.36')
-		Capybara.register_driver :selenium do |app|
-			Capybara::Selenium::Driver.new(app, :browser => :chrome)
+		Capybara.register_driver :poltergeist do |app|
+			Capybara::Poltergeist::Driver.new(app, {:js_errors => false, :timeout => 1000})
 		end
 
 		# establish database connection
@@ -44,17 +44,18 @@ end
 
 class Instagram < SuperNukotan
 	def initialize ()
+		@base_fqdn = 'https://www.instagram.com/'
+		@base_path = 'kuroneko_omz/'
 		super()
-		Capybara.app_host = 'https://www.instagram.com'
-		Capybara.visit '/kuroneko_omz'
+		@session = Capybara::Session.new(:poltergeist)
+		@session.visit @base_fqdn + @base_path
 	end
 
 	def get_newest_info
-		doc = Nokogiri::HTML.parse(Capybara.html)
-		# elem = doc.css('div._myci9 > a').first
+		doc = Nokogiri::HTML.parse(@session.html)
 		elem = doc.css('div._myci9').children.first
 		newest = {}
-		newest[:path] = Capybara.app_host + elem.css('a').first[:href]
+		newest[:path] = @base_fqdn + elem.css('a').first[:href]
 		newest[:images] = [elem.css('img').first[:src]]
 		newest[:body] = elem.css('img').first[:alt]
 		newest[:date] = Time.now.strftime("%Y-%m-%d %H:%M:%S")
@@ -70,6 +71,7 @@ class Instagram < SuperNukotan
 			pp newest
 			tweet = Tweet.new()
 			tweet.send_newest_tweet(isprod, 'instagram', newest)
+			insert_record(newest)
 		end
 	end
 
@@ -84,7 +86,6 @@ class Instagram < SuperNukotan
 			article[:body] = elem.css('img').first[:alt]
 			pp article
 			articles << article
-			insert_record(article) if isinsert
 		end
 		return articles
 	end
@@ -93,13 +94,15 @@ end
 
 class Nekomamma < SuperNukotan
 	def initialize ()
+		@base_fqdn = 'http://nekomamma.jugem.jp/'
+		@base_path = ''
 		super()
-		Capybara.app_host = 'http://nekomamma.jugem.jp'
-		Capybara.visit '/'
+		@session = Capybara::Session.new(:poltergeist)
+		@session.visit @base_fqdn + @base_path
 	end
 
 	def get_newest_info
-		doc = Nokogiri::HTML.parse(Capybara.html)
+		doc = Nokogiri::HTML.parse(@session.html)
 		elem = doc.css('table.entry').first
 		newest = {}
 		newests = []
@@ -111,10 +114,10 @@ class Nekomamma < SuperNukotan
 		end
 		newest[:images] = images
 		
-		newest[:path] = Capybara.app_host + elem.css('div.entry_state > a').first[:href].gsub(/\./, '')
+		newest[:path] = @base_fqdn + elem.css('div.entry_state > a').first[:href].gsub(/\./, '')
 		newest[:date] = elem.css('div.entry_date').text.split(' ')[0].gsub(/\./, "-") + ' ' + elem.css('div.entry_state > a').text
 		
-		splited = split_article_body (newest[:body])
+		splited = split_article_body(newest[:body])
 		splited.each do |p|
 			newests << {
 				:title => newest[:title],
@@ -133,21 +136,22 @@ class Nekomamma < SuperNukotan
 		if @coll.find({'path' => newests.first[:path]}).count == 0 then
 			tweet = Tweet.new()
 			tweet.send_newest_tweet(isprod, 'nekomamma', newests.first)
+			newests.each do |newest|
+				insert_record(newest)
+			end
 		end
 	end
 
 	def get_archive_info (isinsert)
-		doc = Nokogiri::HTML.parse(Capybara.html)
+		doc = Nokogiri::HTML.parse(@session.html)
 		i = 0
 		doc.css('div.menu_box').each do |list|
 			if i == 3 then
 				list.css('a').each do |archive_date|
-					Capybara.click_link archive_date.text
-					p archive_date.text
-					doc = Nokogiri::HTML.parse(Capybara.html)
+					@session.click_link(archive_date.text)
+					doc = Nokogiri::HTML.parse(@session.html)
 					doc.css('td.cell > a').each do |article_date|
-						p article_date.text
-						Capybara.click_link article_date.text
+						@session.click_link(article_date.text)
 						newests = get_newest_info
 						newests.each do |newest|	
 							insert_record(newest) if isinsert
@@ -196,7 +200,7 @@ class Nekomamma < SuperNukotan
                         end
 			isfirst = false
 		end
-		#pp splited2
+		pp splited2
 	end
 end
 
@@ -259,7 +263,6 @@ class Tweet < SuperNukotan
 		else
 			0
 		end
-		insert_record(newest)
 	end		
 end
 
