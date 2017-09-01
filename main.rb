@@ -1,7 +1,6 @@
 require 'capybara'
 require 'capybara/user_agent'
 require 'capybara/poltergeist'
-require 'selenium-webdriver'
 require 'capybara/dsl'
 require 'pp'
 require 'mongo'
@@ -44,57 +43,65 @@ end
 
 class Instagram < SuperNukotan
 	def initialize ()
-		@base_fqdn = 'https://www.instagram.com/'
-		@base_path = 'kuroneko_omz/'
+		@base_fqdn = 'https://www.instagram.com'
+		@base_path = '/kuroneko_omz/'
 		super()
 		@session = Capybara::Session.new(:poltergeist)
 		@session.visit @base_fqdn + @base_path
 	end
 
-	def get_newest_info
-		doc = Nokogiri::HTML.parse(@session.html)
-		elem = doc.css('div._myci9').children.first
+	def get_newest_url
+		instagram_doc = Nokogiri::HTML.parse(@session.html)
+		instagram_json = instagram_doc.xpath('//script[contains(text(),"window._sharedData")]').text[/^[^{]+({.+})/, 1]
+		contents = JSON.parse(instagram_json)
+		code = contents['entry_data']['ProfilePage'][0]['user']['media']['nodes'][0]['code']
+	
+		return @base_fqdn + '/p/' + code + '/?taken-by=kuroneko_omz'
+	end
+
+	def get_newest_detail(newest_url)
+		session = Capybara::Session.new(:poltergeist)
+		session.visit newest_url
+		instagram_doc = Nokogiri::HTML.parse(session.html)
+		instagram_json = instagram_doc.xpath('//script[contains(text(),"window._sharedData")]').text[/^[^{]+({.+})/, 1]
+		contents = JSON.parse(instagram_json)
+
+		node = contents['entry_data']['PostPage'][0]['graphql']['shortcode_media']
+
 		newest = {}
-		newest[:path] = @base_fqdn + elem.css('a').first[:href]
-		newest[:images] = [elem.css('img').first[:src]]
-		newest[:body] = elem.css('img').first[:alt]
-		newest[:date] = Time.now.strftime("%Y-%m-%d %H:%M:%S")
-		pp newest
+		newest[:path] = newest_url
+		newest[:body] = node['edge_media_to_caption']['edges'][0]['node']['text']
+		newest[:date] = Time.now.strftime('%Y-%m-%d %H:%M:%S')
+
+		if node['edge_sidecar_to_children'] then
+			newest[:images] = []
+			node['edge_sidecar_to_children']['edges'].each do |edge|
+				newest[:images].push(edge['node']['display_url'])
+			end
+		else
+			newest[:images] = [node['display_url']]
+		end
+
 		return newest
 	end
 
 	def check_newest_info (isprod)
-		newest = get_newest_info
+		newest_url = get_newest_url
 	
-		if @coll.find({'path' => newest[:path]}).count == 0 then
+		if @coll.find({'path' => newest_url}).count == 0 then
 			p 'Update Instagram: '
+			newest = get_newest_detail(newest_url)
 			pp newest
 			tweet = Tweet.new()
 			tweet.send_newest_tweet(isprod, 'instagram', newest)
 			insert_record(newest)
 		end
 	end
-
-	def get_archive_info (isinsert)
-		f = File.open('./insta_all.html', 'r:utf-8')
-		doc = Nokogiri::HTML(f)
-		article = {}
-		articles = []
-		doc.css('a._8mlbc').each do |elem|
-			article[:path] = Capybara.app_host + elem[:href]
-			article[:images] = [elem.css('img').first[:src]]
-			article[:body] = elem.css('img').first[:alt]
-			pp article
-			articles << article
-		end
-		return articles
-	end
-			
 end
 
 class Nekomamma < SuperNukotan
 	def initialize ()
-		@base_fqdn = 'http://nekomamma.jugem.jp/'
+		@base_fqdn = 'http://nekomamma.jugem.jp'
 		@base_path = ''
 		super()
 		@session = Capybara::Session.new(:poltergeist)
@@ -228,8 +235,8 @@ class Tweet < SuperNukotan
 			if record['images'].length == 0 then
 				@client.update(message)
 			else
-				media = open(record['images'].sample)
-				@client.update_with_media(message, media)
+				media_ids = select_medias(record[:images])
+				@client.update message, {media_ids: media_ids.join(',')} if isprod
 			end
 		end
 	end
@@ -244,8 +251,12 @@ class Tweet < SuperNukotan
 				message += newest[:body] + "\n"
 			end
 			message += newest[:path]
-			media = open(newest[:images].first)
-			@client.update_with_media(message, media) if isprod
+
+			media_ids = []
+			if isprod then
+				media_ids = select_medias(newest[:images])
+				@client.update message, {media_ids: media_ids.join(',')} if isprod
+			end
 		when type == 'nekomamma'
 			message = ("黒猫のねこまんま通信が更新されました(*´Д`)ﾊｧﾊｧ\n\n" + newest[:title])[0, 110] + "\n" + newest[:path]
 			if newest[:images].length == 0 then
@@ -253,26 +264,26 @@ class Tweet < SuperNukotan
 			else
 				media_ids = []
 				if isprod then
-					newest[:images].each do |image_path|
-						media = open(image_path)
-						media_ids << @client.upload(media)
-					end
+					media_ids = select_medias(newest[:images])
 					@client.update message, {media_ids: media_ids.join(',')} if isprod
 				end
 			end
 		else
 			0
 		end
-	end		
+	end
+
+	def select_medias(images)
+		media_ids = []
+		images.shuffle.each do |image_path|
+			media = open(image_path)
+			media_ids << @client.upload(media)
+			if media_ids.length == 4 then
+				break
+			end
+		end
+		return media_ids
+	end
+		
 end
 
-nuko = Nekomamma.new()
-
-
-#nuko = Instagram.new()
-# nuko.get_newest_info
-#nuko.get_archive_info(true)
-#nuko.check_newest_info(true)
-
-# nuko = Tweet.new()
-# nuko.send_stored_tweet(true)
